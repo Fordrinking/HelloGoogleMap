@@ -1,40 +1,39 @@
 package com.hill1942.hellogooglemap;
 
-import android.content.DialogInterface;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.net.NetworkInfo;
+import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.FrameLayout;
+import android.widget.Button;
 import android.widget.TextView;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
-import com.google.android.gms.common.api.PendingResult;
-import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.location.LocationServices;
-import com.google.android.gms.location.places.PlaceLikelihood;
-import com.google.android.gms.location.places.PlaceLikelihoodBuffer;
-import com.google.android.gms.location.places.Places;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.LatLng;
-import com.google.android.gms.maps.model.Marker;
-import com.google.android.gms.maps.model.MarkerOptions;
+import com.hill1942.hellogooglemap.SENetwork.NetworkUtil;
+import com.hill1942.hellogooglemap.SENetwork.URLTransCallback;
+
+import java.util.HashMap;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity implements
-        OnMapReadyCallback,
         GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener {
 
@@ -50,7 +49,9 @@ public class MainActivity extends AppCompatActivity implements
     private final LatLng mDefaultLocation = new LatLng(-33.8523341, 151.2106085);
     private static final int DEFAULT_ZOOM = 15;
     private static final int PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION = 1;
+    private static final int PERMISSIONS_REQUEST_PHONE_STATE = 0;
     private boolean mLocationPermissionGranted;
+    private boolean mPhoneStatePermissionGranted;
 
     // The geographical location where the device is currently located. That is, the last-known
     // location retrieved by the Fused Location Provider.
@@ -60,12 +61,13 @@ public class MainActivity extends AppCompatActivity implements
     private static final String KEY_CAMERA_POSITION = "camera_position";
     private static final String KEY_LOCATION = "location";
 
-    // Used for selecting the current place.
-    private final int mMaxEntries = 5;
-    private String[] mLikelyPlaceNames = new String[mMaxEntries];
-    private String[] mLikelyPlaceAddresses = new String[mMaxEntries];
-    private String[] mLikelyPlaceAttributions = new String[mMaxEntries];
-    private LatLng[] mLikelyPlaceLatLngs = new LatLng[mMaxEntries];
+
+    private TextView tv;
+    private Button btn;
+    private TextView nb_tv;
+    private Button nb_btn;
+    private NetworkUtil mNetworkUtil;
+    private String mOpenId;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,7 +80,9 @@ public class MainActivity extends AppCompatActivity implements
         }
 
         // Retrieve the content view that renders the map.
-        setContentView(R.layout.activity_maps);
+        setContentView(R.layout.activity_main);
+
+        mOpenId = getUID();
 
         // Build the Play services client for use by the Fused Location Provider and the Places API.
         // Use the addApi() method to request the Google Places API and the Fused Location Provider.
@@ -87,8 +91,6 @@ public class MainActivity extends AppCompatActivity implements
                         this /* OnConnectionFailedListener */)
                 .addConnectionCallbacks(this)
                 .addApi(LocationServices.API)
-                .addApi(Places.GEO_DATA_API)
-                .addApi(Places.PLACE_DETECTION_API)
                 .build();
         mGoogleApiClient.connect();
     }
@@ -111,9 +113,33 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public void onConnected(Bundle connectionHint) {
         // Build the map.
-        SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
+        /*SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
-        mapFragment.getMapAsync(this);
+        mapFragment.getMapAsync(this);*/
+
+        tv  = (TextView) findViewById(R.id.lc_tv);
+        btn = (Button) findViewById(R.id.lc_btn);
+
+        nb_tv  = (TextView) findViewById(R.id.nb_tv);
+        nb_btn = (Button) findViewById(R.id.nb_btn);
+
+        btn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Log.i("view", "click");
+                getDeviceLocation();
+
+            }
+        });
+
+        nb_btn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Log.i("view", "click");
+                getMyNeighbour();
+
+            }
+        });
     }
 
     /**
@@ -154,7 +180,7 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == R.id.option_get_place) {
-            showCurrentPlace();
+            return true;
         }
         return true;
     }
@@ -163,42 +189,16 @@ public class MainActivity extends AppCompatActivity implements
      * Manipulates the map when it's available.
      * This callback is triggered when the map is ready to be used.
      */
-    @Override
+    /*@Override
     public void onMapReady(GoogleMap map) {
         mMap = map;
-
-        // Use a custom info window adapter to handle multiple lines of text in the
-        // info window contents.
-        mMap.setInfoWindowAdapter(new GoogleMap.InfoWindowAdapter() {
-
-            @Override
-            // Return null here, so that getInfoContents() is called next.
-            public View getInfoWindow(Marker arg0) {
-                return null;
-            }
-
-            @Override
-            public View getInfoContents(Marker marker) {
-                // Inflate the layouts for the info window, title and snippet.
-                View infoWindow = getLayoutInflater().inflate(R.layout.custom_info_contents,
-                        (FrameLayout)findViewById(R.id.map), false);
-
-                TextView title = ((TextView) infoWindow.findViewById(R.id.title));
-                title.setText(marker.getTitle());
-
-                TextView snippet = ((TextView) infoWindow.findViewById(R.id.snippet));
-                snippet.setText(marker.getSnippet());
-
-                return infoWindow;
-            }
-        });
 
         // Turn on the My Location layer and the related control on the map.
         updateLocationUI();
 
         // Get the current location of the device and set the position of the map.
         getDeviceLocation();
-    }
+    }*/
 
     /**
      * Gets the current location of the device, and positions the map's camera.
@@ -209,35 +209,107 @@ public class MainActivity extends AppCompatActivity implements
          * device. The result of the permission request is handled by a callback,
          * onRequestPermissionsResult.
          */
-        if (ContextCompat.checkSelfPermission(this.getApplicationContext(),
-                android.Manifest.permission.ACCESS_FINE_LOCATION)
+        if (ContextCompat.checkSelfPermission(this.getApplicationContext(), android.Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             mLocationPermissionGranted = true;
         } else {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION},
-                    PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION);
+            String[] permissions = {
+                    android.Manifest.permission.ACCESS_FINE_LOCATION
+            };
+            ActivityCompat.requestPermissions(this, permissions, PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION);
         }
         /*
          * Get the best and most recent location of the device, which may be null in rare
          * cases when a location is not available.
          */
         if (mLocationPermissionGranted) {
-            mLastKnownLocation = LocationServices.FusedLocationApi
-                    .getLastLocation(mGoogleApiClient);
+            mLastKnownLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
         }
 
         // Set the map's camera position to the current location of the device.
-        if (mCameraPosition != null) {
-            mMap.moveCamera(CameraUpdateFactory.newCameraPosition(mCameraPosition));
-        } else if (mLastKnownLocation != null) {
-            mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(
+        if (mLastKnownLocation != null) {
+
+            double longitude = mLastKnownLocation.getLongitude();
+            double latitude  = mLastKnownLocation.getLatitude();
+
+            String str = "(" + longitude + ", " + latitude + ")";
+            tv.setText(str);
+
+            Log.i("google location: ", str);
+
+            mNetworkUtil = NetworkUtil.getInstance();
+            if (mNetworkUtil != null) {
+                // Execute the async download.
+                Map<String, String> params = new HashMap<String, String>();
+                params.put("openid", mOpenId);
+                params.put("longitude", String.valueOf(longitude));
+                params.put("latitude", String.valueOf(latitude));
+                Log.i("SENetwork:  ", "start url trans");
+                mNetworkUtil.startURLTrans("http://lbs.hill1942.com/api/upload", params, new URLTransCallback<String>() {
+                    @Override
+                    public void updateFromTrans(String result) {
+
+                    }
+
+                    @Override
+                    public NetworkInfo getActiveNetworkInfo() {
+                        return null;
+                    }
+
+                    @Override
+                    public void onProgressUpdate(int progressCode, int percentComplete) {
+
+                    }
+
+                    @Override
+                    public void finishTrans() {
+
+                    }
+                });
+            }
+
+            /*mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(
                     new LatLng(mLastKnownLocation.getLatitude(),
-                            mLastKnownLocation.getLongitude()), DEFAULT_ZOOM));
+                            mLastKnownLocation.getLongitude()), DEFAULT_ZOOM));*/
         } else {
-            Log.d(TAG, "Current location is null. Using defaults.");
-            mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(mDefaultLocation, DEFAULT_ZOOM));
-            mMap.getUiSettings().setMyLocationButtonEnabled(false);
+            Log.d(TAG, "Current location is null.");
+            /*mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(mDefaultLocation, DEFAULT_ZOOM));
+            mMap.getUiSettings().setMyLocationButtonEnabled(false);*/
+        }
+    }
+
+    private void getMyNeighbour() {
+        Log.i("getMyNeighbour", "with openid: " + mOpenId);
+
+        mNetworkUtil = NetworkUtil.getInstance();
+        if (mNetworkUtil != null) {
+            // Execute the async download.
+            Map<String, String> params = new HashMap<String, String>();
+            params.put("openid", mOpenId);
+            Log.i("SENetwork:  ", "start url trans");
+            mNetworkUtil.startURLTrans("http://lbs.hill1942.com/api/aroundByOpenId", params, new URLTransCallback<String>() {
+                @Override
+                public void updateFromTrans(String result) {
+                    //Log.i("getMyNeighbour", "out is: " + result);
+                    nb_tv.setText(result);
+
+                }
+
+                @Override
+                public NetworkInfo getActiveNetworkInfo() {
+                    return null;
+                }
+
+                @Override
+                public void onProgressUpdate(int progressCode, int percentComplete) {
+
+                }
+
+                @Override
+                public void finishTrans() {
+
+                }
+            });
         }
     }
 
@@ -249,127 +321,55 @@ public class MainActivity extends AppCompatActivity implements
                                            @NonNull String permissions[],
                                            @NonNull int[] grantResults) {
         mLocationPermissionGranted = false;
+        mPhoneStatePermissionGranted = false;
+
         switch (requestCode) {
             case PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION: {
                 // If request is cancelled, the result arrays are empty.
-                if (grantResults.length > 0
-                        && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                     mLocationPermissionGranted = true;
                 }
+
+                //getDeviceLocation();
+
+                break;
+            }
+            case PERMISSIONS_REQUEST_PHONE_STATE: {
+                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    mPhoneStatePermissionGranted = true;
+                }
+
+                //mOpenId = getUID();
+
+                break;
             }
         }
-        updateLocationUI();
-    }
 
-    /**
-     * Prompts the user to select the current place from a list of likely places, and shows the
-     * current place on the map - provided the user has granted location permission.
-     */
-    private void showCurrentPlace() {
-        if (mMap == null) {
-            return;
-        }
 
-        if (mLocationPermissionGranted) {
-            // Get the likely places - that is, the businesses and other points of interest that
-            // are the best match for the device's current location.
-            @SuppressWarnings("MissingPermission")
-            PendingResult<PlaceLikelihoodBuffer> result = Places.PlaceDetectionApi
-                    .getCurrentPlace(mGoogleApiClient, null);
-            result.setResultCallback(new ResultCallback<PlaceLikelihoodBuffer>() {
-                @Override
-                public void onResult(@NonNull PlaceLikelihoodBuffer likelyPlaces) {
-                    int i = 0;
-                    mLikelyPlaceNames = new String[mMaxEntries];
-                    mLikelyPlaceAddresses = new String[mMaxEntries];
-                    mLikelyPlaceAttributions = new String[mMaxEntries];
-                    mLikelyPlaceLatLngs = new LatLng[mMaxEntries];
-                    for (PlaceLikelihood placeLikelihood : likelyPlaces) {
-                        // Build a list of likely places to show the user. Max 5.
-                        mLikelyPlaceNames[i] = (String) placeLikelihood.getPlace().getName();
-                        mLikelyPlaceAddresses[i] = (String) placeLikelihood.getPlace().getAddress();
-                        mLikelyPlaceAttributions[i] = (String) placeLikelihood.getPlace()
-                                .getAttributions();
-                        mLikelyPlaceLatLngs[i] = placeLikelihood.getPlace().getLatLng();
-
-                        i++;
-                        if (i > (mMaxEntries - 1)) {
-                            break;
-                        }
-                    }
-                    // Release the place likelihood buffer, to avoid memory leaks.
-                    likelyPlaces.release();
-
-                    // Show a dialog offering the user the list of likely places, and add a
-                    // marker at the selected place.
-                    openPlacesDialog();
-                }
-            });
-        } else {
-            // Add a default marker, because the user hasn't selected a place.
-            mMap.addMarker(new MarkerOptions()
-                    .title(getString(R.string.default_info_title))
-                    .position(mDefaultLocation)
-                    .snippet(getString(R.string.default_info_snippet)));
-        }
-    }
-
-    /**
-     * Displays a form allowing the user to select a place from a list of likely places.
-     */
-    private void openPlacesDialog() {
-        // Ask the user to choose the place where they are now.
-        DialogInterface.OnClickListener listener =
-                new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        // The "which" argument contains the position of the selected item.
-                        LatLng markerLatLng = mLikelyPlaceLatLngs[which];
-                        String markerSnippet = mLikelyPlaceAddresses[which];
-                        if (mLikelyPlaceAttributions[which] != null) {
-                            markerSnippet = markerSnippet + "\n" + mLikelyPlaceAttributions[which];
-                        }
-                        // Add a marker for the selected place, with an info window
-                        // showing information about that place.
-                        mMap.addMarker(new MarkerOptions()
-                                .title(mLikelyPlaceNames[which])
-                                .position(markerLatLng)
-                                .snippet(markerSnippet));
-
-                        // Position the map's camera at the location of the marker.
-                        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(markerLatLng,
-                                DEFAULT_ZOOM));
-                    }
-                };
-
-        // Display the dialog.
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(R.string.pick_place)
-                .setItems(mLikelyPlaceNames, listener)
-                .show();
     }
 
     /**
      * Updates the map's UI settings based on whether the user has granted location permission.
      */
-    private void updateLocationUI() {
+    /*private void updateLocationUI() {
         if (mMap == null) {
             return;
         }
 
-        /*
+        *//*
          * Request location permission, so that we can get the location of the
          * device. The result of the permission request is handled by a callback,
          * onRequestPermissionsResult.
-         */
-        if (ContextCompat.checkSelfPermission(this.getApplicationContext(),
-                android.Manifest.permission.ACCESS_FINE_LOCATION)
+         *//*
+        if (ContextCompat.checkSelfPermission(this.getApplicationContext(), android.Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             mLocationPermissionGranted = true;
         } else {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION},
-                    PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION);
+            String[] permissions = {
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.READ_PHONE_STATE
+            };
+            ActivityCompat.requestPermissions(this, permissions, PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION);
         }
 
         if (mLocationPermissionGranted) {
@@ -380,5 +380,44 @@ public class MainActivity extends AppCompatActivity implements
             mMap.getUiSettings().setMyLocationButtonEnabled(false);
             mLastKnownLocation = null;
         }
+    }*/
+
+    public String getUID() {
+        if (ContextCompat.checkSelfPermission(this.getApplicationContext(), android.Manifest.permission.READ_PHONE_STATE)
+                == PackageManager.PERMISSION_GRANTED) {
+            mPhoneStatePermissionGranted = true;
+        } else {
+            String[] permissions = {
+                    android.Manifest.permission.READ_PHONE_STATE
+            };
+            ActivityCompat.requestPermissions(this, permissions, PERMISSIONS_REQUEST_PHONE_STATE);
+        }
+
+        if (mPhoneStatePermissionGranted) {
+            TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+            String deviceId = tm.getDeviceId();
+            deviceId = deviceId +
+                    Build.BOARD.length() % 10 +
+                    Build.BRAND.length() % 10 +
+                    Build.CPU_ABI.length() % 10 +
+                    Build.DEVICE.length() % 10 +
+                    Build.DISPLAY.length() % 10 +
+                    Build.HOST.length() % 10 +
+                    Build.ID.length() % 10 +
+                    Build.MANUFACTURER.length() % 10 +
+                    Build.MODEL.length() % 10 +
+                    Build.PRODUCT.length() % 10 +
+                    Build.TAGS.length() % 10 +
+                    Build.TYPE.length() % 10 +
+                    Build.USER.length() % 10; //13 digits
+
+            String uid = SETool.md5(deviceId);
+
+            Log.i("Main Activity UID", uid);
+
+            return uid;
+        }
+
+        return "null";
     }
 }
